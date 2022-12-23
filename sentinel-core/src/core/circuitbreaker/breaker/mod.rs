@@ -141,6 +141,23 @@ pub trait CircuitBreakerTrait: Send + Sync {
         self.breaker().set_state(state);
     }
 
+    #[inline]
+    fn force_change_state_to_open(&self) -> bool {
+        match self.current_state() {
+            State::Closed => self.from_closed_to_open(Arc::new("Force")),
+            State::HalfOpen => self.from_half_open_to_open(Arc::new("Force")),
+            State::Open => true,
+        }
+    }
+
+    fn force_change_state_to_close(&self) -> bool {
+        match self.current_state() {
+            State::Closed => true,
+            State::HalfOpen => self.from_half_open_to_closed(),
+            State::Open => self.from_open_to_close(),
+        }
+    }
+
     /// `current_state` returns current state of the circuit breaker.
     #[inline]
     fn current_state(&self) -> State {
@@ -179,6 +196,11 @@ pub trait CircuitBreakerTrait: Send + Sync {
     #[inline]
     fn from_half_open_to_closed(&self) -> bool {
         self.breaker().from_half_open_to_closed()
+    }
+
+    #[inline]
+    fn from_open_to_close(&self) -> bool {
+        self.breaker().from_open_to_close()
     }
 }
 
@@ -338,6 +360,25 @@ impl BreakerBase {
             let listeners = state_change_listeners().lock().unwrap();
             for listener in &*listeners {
                 listener.on_transform_to_closed(State::HalfOpen, Arc::clone(&self.rule));
+            }
+
+            #[cfg(feature = "exporter")]
+            crate::exporter::add_state_change_counter(&self.rule.resource, "HalfOpen", "Closed");
+            true
+        } else {
+            false
+        }
+    }
+
+    /// from_open_to_close updates circuit breaker state machine from open to closed
+    /// Return true only if current goroutine successfully accomplished the transformation.
+    pub fn from_open_to_close(&self) -> bool {
+        let mut state = self.state.lock().unwrap();
+        if *state == State::Open {
+            *state = State::Closed;
+            let listeners = state_change_listeners().lock().unwrap();
+            for listener in &*listeners {
+                listener.on_transform_to_closed(State::Open, Arc::clone(&self.rule));
             }
 
             #[cfg(feature = "exporter")]
