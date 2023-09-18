@@ -67,13 +67,7 @@ impl CircuitBreakerTrait for SlowRtBreaker {
         }
         counter.value().total.fetch_add(1, Ordering::SeqCst);
 
-        let mut slow_count = 0;
-        let mut total_count = 0;
-        let counters = self.stat.all_counter();
-        for c in counters {
-            slow_count += c.value().target.load(Ordering::SeqCst);
-            total_count += c.value().total.load(Ordering::SeqCst);
-        }
+        let (total_count, slow_count) = self.stat().get_total_and_target_count();
 
         let slow_ratio = slow_count as f64 / total_count as f64;
         // handle state changes when threshold exceeded

@@ -34,6 +34,17 @@ impl CounterLeapArray {
         // currently, it cannot be visited safely under an Arc
         self.get_current_values()
     }
+
+    pub fn get_total_and_target_count(&self) -> (u64, u64) {
+        let mut target_count = 0;
+        let mut total_count = 0;
+        let counters = self.get_current_values();
+        for c in counters {
+            target_count += c.value().target.load(Ordering::SeqCst);
+            total_count += c.value().total.load(Ordering::SeqCst);
+        }
+        (total_count, target_count)
+    }
 }
 
 #[cfg(test)]

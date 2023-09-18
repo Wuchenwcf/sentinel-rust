@@ -61,13 +61,7 @@ impl CircuitBreakerTrait for ErrorRatioBreaker {
         }
         counter.value().total.fetch_add(1, Ordering::SeqCst);
 
-        let mut error_count = 0;
-        let mut total_count = 0;
-        let counters = self.stat.all_counter();
-        for c in counters {
-            error_count += c.value().target.load(Ordering::SeqCst);
-            total_count += c.value().total.load(Ordering::SeqCst);
-        }
+        let (total_count, error_count) = self.stat().get_total_and_target_count();
 
         let error_ratio = error_count as f64 / total_count as f64;
         // handle state changes when threshold exceeded

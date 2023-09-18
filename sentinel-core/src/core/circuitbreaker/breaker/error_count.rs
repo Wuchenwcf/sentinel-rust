@@ -62,13 +62,7 @@ impl CircuitBreakerTrait for ErrorCountBreaker {
         }
         counter.value().total.fetch_add(1, Ordering::SeqCst);
 
-        let mut error_count = 0;
-        let mut total_count = 0;
-        let counters = self.stat.all_counter();
-        for c in counters {
-            error_count += c.value().target.load(Ordering::SeqCst);
-            total_count += c.value().total.load(Ordering::SeqCst);
-        }
+        let (total_count, error_count) = self.stat().get_total_and_target_count();
 
         // handle state changes when threshold exceeded
         match self.current_state() {
