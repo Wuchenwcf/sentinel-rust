@@ -19,18 +19,18 @@ pub trait BaseSlot: Any + AsAny + Sync + Send {
 /// StatPrepareSlot is responsible for some preparation before statistic
 /// For example: init structure and so on
 pub trait StatPrepareSlot: BaseSlot {
-    /// prepare fntion do some initialization
+    /// prepare function do some initialization
     /// Such as: init statistic structure、node and etc
     /// The result of preparing would store in EntryContext
     /// All StatPrepareSlots execute in sequence
-    /// prepare fntion should not throw panic.
+    /// prepare function should not throw panic.
     fn prepare(&self, _ctx: &mut EntryContext) {}
 }
 
 /// RuleCheckSlot is rule based checking strategy
 /// All checking rule must implement this interface.
 pub trait RuleCheckSlot: BaseSlot {
-    // check fntion do some validation
+    // check function do some validation
     // It can break off the slot pipeline
     // Each TokenResult will return check result
     // The upper logic will control pipeline according to SlotResult.
@@ -42,17 +42,17 @@ pub trait RuleCheckSlot: BaseSlot {
 /// StatSlot is responsible for counting all custom biz metrics.
 /// StatSlot would not handle any panic, and pass up all panic to slot chain
 pub trait StatSlot: BaseSlot {
-    /// OnEntryPass fntion will be invoked when StatPrepareSlots and RuleCheckSlots execute pass
+    /// OnEntryPass function will be invoked when StatPrepareSlots and RuleCheckSlots execute pass
     /// StatSlots will do some statistic logic, such as QPS、log、etc
     fn on_entry_pass(&self, _ctx: &EntryContext) {}
-    /// on_entry_blocked fntion will be invoked when StatPrepareSlots and RuleCheckSlots fail to execute
+    /// on_entry_blocked function will be invoked when StatPrepareSlots and RuleCheckSlots fail to execute
     /// It may be inbound flow control or outbound cir
     /// StatSlots will do some statistic logic, such as QPS、log、etc
     /// blockError introduce the block detail
-    fn on_entry_blocked(&self, _ctx: &EntryContext, _block_error: Option<BlockError>) {}
-    /// on_completed fntion will be invoked when chain exits.
+    fn on_entry_blocked(&self, _ctx: &EntryContext, _block_error: BlockError) {}
+    /// on_completed function will be invoked when chain exits.
     /// The semantics of on_completed is the entry passed and completed
-    /// Note: blocked entry will not call this fntion
+    /// Note: blocked entry will not call this function
     fn on_completed(&self, _ctx: &mut EntryContext) {}
 }
 
@@ -67,20 +67,23 @@ pub struct SlotChain {
     pub(self) stats: Vec<Arc<dyn StatSlot>>,
 }
 
-impl SlotChain {
-    pub fn new() -> Self {
+impl Default for SlotChain {
+    fn default() -> Self {
         Self {
             stat_pres: Vec::with_capacity(SLOT_INIT),
             rule_checks: Vec::with_capacity(SLOT_INIT),
             stats: Vec::with_capacity(SLOT_INIT),
         }
     }
+}
+
+impl SlotChain {
+    pub fn new() -> Self {
+        Default::default()
+    }
 
     pub fn exit(&self, ctx_ptr: ContextPtr) {
-        cfg_if_async! {
-            let mut ctx = ctx_ptr.write().unwrap(),
-            let mut ctx = ctx_ptr.borrow_mut()
-        };
+        let mut ctx = ctx_ptr.write().unwrap();
         if ctx.entry().is_none() {
             logging::error!("SentinelEntry is nil in SlotChain.exit()");
             return;
@@ -90,7 +93,7 @@ impl SlotChain {
         }
         // The on_completed is called only when entry passed
         for s in &self.stats {
-            s.on_completed(&mut *ctx);
+            s.on_completed(&mut ctx);
         }
     }
 
@@ -124,19 +127,16 @@ impl SlotChain {
     /// The entrance of slot chain
     /// Return the TokenResult
     pub fn entry(&self, ctx_ptr: ContextPtr) -> TokenResult {
-        cfg_if_async! {
-            let mut ctx = ctx_ptr.write().unwrap(),
-            let mut ctx = ctx_ptr.borrow_mut()
-        };
+        let mut ctx = ctx_ptr.write().unwrap();
         // execute prepare slot
         for s in &self.stat_pres {
-            s.prepare(&mut *ctx); // Rc/Arc clone
+            s.prepare(&mut ctx); // Rc/Arc clone
         }
 
         // execute rule based checking slot
         ctx.reset_result_to_pass();
         for s in &self.rule_checks {
-            let res = s.check(&mut *ctx);
+            let res = s.check(&mut ctx);
             // check slot result
             if res.is_blocked() {
                 ctx.set_result(res.clone());
@@ -147,10 +147,10 @@ impl SlotChain {
         for s in &self.stats {
             // indicate the result of rule based checking slot.
             if ctx.result().is_pass() {
-                s.on_entry_pass(&*ctx) // Rc/Arc clone
-            } else {
-                // The block error should not be nil.
-                s.on_entry_blocked(&*ctx, ctx.result().block_err()) // Rc/Arc clone
+                s.on_entry_pass(&ctx) // Rc/Arc clone
+            } else if ctx.result().is_blocked() {
+                // The block error should not be none.
+                s.on_entry_blocked(&ctx, ctx.result().block_err().unwrap()) // Rc/Arc clone
             }
         }
         ctx.result().clone()
@@ -167,9 +167,7 @@ mod test {
         TrafficType,
     };
     use super::*;
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    use std::sync::Arc;
+    use std::sync::RwLock;
 
     // here we test three kinds of slots one by one
     mod single {
@@ -191,7 +189,7 @@ mod test {
                 for i in 0..10 {
                     let order = base * 10 + i;
                     sc.add_stat_prepare_slot(Arc::new(StatPrepareSlotMock {
-                        name: String::from(format!("mock{}", order)),
+                        name: format!("mock{}", order),
                         order,
                     }))
                 }
@@ -226,7 +224,7 @@ mod test {
                 for i in 0..10 {
                     let order = base * 10 + i;
                     sc.add_rule_check_slot(Arc::new(RuleCheckSlotMock {
-                        name: String::from(format!("mock{}", order)),
+                        name: format!("mock{}", order),
                         order,
                     }))
                 }
@@ -261,7 +259,7 @@ mod test {
                 for i in 0..10 {
                     let order = base * 10 + i;
                     sc.add_stat_slot(Arc::new(StatSlotMock {
-                        name: String::from(format!("mock{}", order)),
+                        name: format!("mock{}", order),
                         order,
                     }))
                 }
@@ -305,7 +303,7 @@ mod test {
             impl BaseSlot for StatSlot {}
             impl StatSlot for StatSlot {
                 fn on_entry_pass(&self, ctx: &EntryContext);
-                fn on_entry_blocked(&self, ctx: &EntryContext, block_error: Option<BlockError>);
+                fn on_entry_blocked(&self, ctx: &EntryContext, block_error: BlockError);
                 fn on_completed(&self, ctx: &mut EntryContext);
             }
         }
@@ -364,13 +362,13 @@ mod test {
             let rw = ResourceWrapper::new("abc".into(), ResourceType::Common, TrafficType::Inbound);
             ctx.set_resource(rw);
             ctx.set_stat_node(Arc::new(MockStatNode::new()));
-            let ctx = Rc::new(RefCell::new(ctx));
-            let entry = Rc::new(RefCell::new(SentinelEntry::new(ctx.clone(), sc.clone())));
-            ctx.borrow_mut().set_entry(Rc::downgrade(&entry));
+            let ctx = Arc::new(RwLock::new(ctx));
+            let entry = Arc::new(RwLock::new(SentinelEntry::new(ctx.clone(), sc.clone())));
+            ctx.write().unwrap().set_entry(Arc::downgrade(&entry));
 
-            let r = sc.entry(Rc::clone(&ctx));
+            let r = sc.entry(Arc::clone(&ctx));
             assert!(r.is_pass(), "should pass but blocked");
-            sc.exit(Rc::clone(&ctx));
+            sc.exit(Arc::clone(&ctx));
         }
 
         #[test]
@@ -427,21 +425,21 @@ mod test {
             let rw = ResourceWrapper::new("abc".into(), ResourceType::Common, TrafficType::Inbound);
             ctx.set_resource(rw);
             ctx.set_stat_node(Arc::new(MockStatNode::new()));
-            let ctx = Rc::new(RefCell::new(ctx));
-            let entry = Rc::new(RefCell::new(SentinelEntry::new(
-                Rc::clone(&ctx),
+            let ctx = Arc::new(RwLock::new(ctx));
+            let entry = Arc::new(RwLock::new(SentinelEntry::new(
+                Arc::clone(&ctx),
                 sc.clone(),
             )));
-            ctx.borrow_mut().set_entry(Rc::downgrade(&entry));
+            ctx.write().unwrap().set_entry(Arc::downgrade(&entry));
 
-            let r = sc.entry(Rc::clone(&ctx));
+            let r = sc.entry(Arc::clone(&ctx));
             assert!(r.is_blocked(), "should blocked but pass");
             assert_eq!(
                 BlockType::Flow,
                 r.block_err().unwrap().block_type(),
                 "should blocked by BlockType Flow"
             );
-            sc.exit(Rc::clone(&ctx));
+            sc.exit(Arc::clone(&ctx));
         }
 
         struct StatPrepareSlotBadMock {}
@@ -498,14 +496,14 @@ mod test {
             let rw = ResourceWrapper::new("abc".into(), ResourceType::Common, TrafficType::Inbound);
             ctx.set_resource(rw);
             ctx.set_stat_node(Arc::new(MockStatNode::new()));
-            let ctx = Rc::new(RefCell::new(ctx));
-            let entry = Rc::new(RefCell::new(SentinelEntry::new(
-                Rc::clone(&ctx),
+            let ctx = Arc::new(RwLock::new(ctx));
+            let entry = Arc::new(RwLock::new(SentinelEntry::new(
+                Arc::clone(&ctx),
                 sc.clone(),
             )));
-            ctx.borrow_mut().set_entry(Rc::downgrade(&entry));
+            ctx.write().unwrap().set_entry(Arc::downgrade(&entry));
 
-            sc.entry(Rc::clone(&ctx));
+            sc.entry(Arc::clone(&ctx));
         }
     }
 }

@@ -1,4 +1,7 @@
-use crate::{base::TokenResult, config};
+use crate::{
+    base::{BlockType, TokenResult},
+    config,
+};
 ///! exporter the process protected by Sentinel
 use lazy_static::lazy_static;
 use prometheus_exporter::{
@@ -57,17 +60,10 @@ lazy_static! {
     )
     .unwrap();
     static ref GAUGE_METRICS: Vec<GaugeVec> = {
-        let mut vec = Vec::new();
-        vec.push(CPU_RATIO_GAUGE.clone());
-        vec.push(MEMORY_SIZE_GAUGE.clone());
-        vec.push(FLOW_THRESHOLD_GAUGE.clone());
-        vec
+        vec![CPU_RATIO_GAUGE.clone(), MEMORY_SIZE_GAUGE.clone(), FLOW_THRESHOLD_GAUGE.clone()]
     };
     static ref COUNTER_METRICS: Vec<CounterVec> = {
-        let mut vec = Vec::new();
-        vec.push(STATE_CHANGE_COUNTER.clone());
-        vec.push(HANDLED_COUNTER.clone());
-        vec
+        vec![STATE_CHANGE_COUNTER.clone(), HANDLED_COUNTER.clone()]
     };
     static ref INIT_ONCE: Once = Once::new();
 }
@@ -96,7 +92,12 @@ pub fn add_state_change_counter(resourse: &str, from: &str, to: &str) {
         .inc_by(1.0);
 }
 
-pub fn add_handled_counter(batch_count: u32, resource: &str, result: TokenResult) {
+pub fn add_handled_counter(
+    batch_count: u32,
+    resource: &str,
+    result: TokenResult,
+    block_type: Option<BlockType>,
+) {
     HANDLED_COUNTER
         .with_label_values(&[
             &HOST_NAME,
@@ -104,6 +105,7 @@ pub fn add_handled_counter(batch_count: u32, resource: &str, result: TokenResult
             &PID_STRING,
             resource,
             &result.to_string(),
+            &block_type.map_or(String::new(), |v| v.to_string()),
         ])
         .inc_by(batch_count as f64);
 }
